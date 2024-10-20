@@ -1,0 +1,71 @@
+! pip install gurobipy
+! pip install pandas 
+! pip install pandas 
+# Parameters
+m = 5  # Number of customer nodes (yellow nodes)
+n = 3  # Number of discharging stations (green nodes)
+u = 3  # Number of EVs (vehicles)
+C = 10  # Carrying capacity of each EV (goods)
+Q = 100  # Starting State-of-Charge (SoC) of each EV (battery capacity)
+ci = [5, 8, 3, 7, 6]  # Goods demand at each customer node
+di = [[0, 10, 15, 20, 10], [10, 0, 25, 30, 12], [15, 25, 0, 14, 22], [20, 30, 14, 0, 8], [10, 12, 22, 8, 0]]  # Distance between customer nodes
+ds = [[0, 12, 18], [12, 0, 20], [18, 20, 0]]  # Distance between discharging stations
+H = 0.2  # Charge consumption rate per km (kWh/km)
+b = [[H * d for d in row] for row in di]  # Energy consumed in traveling between customer nodes
+R = 10  # Recharging rate at discharging stations (kWh/hour)
+# Create the model
+model = gp.Model("EV_VRP")
+# Decision variables
+alpha = model.addVars(u, m, m, vtype=GRB.BINARY, name="alpha")  # Binary route of EVs between customer nodes
+beta = model.addVars(u, n, m, vtype=GRB.BINARY, name="beta")  # Binary decision for visiting discharging stations
+theta = model.addVars(u, m, vtype=GRB.CONTINUOUS, name="theta")  # Remaining battery at arrival at customer nodes
+lambda_ = model.addVars(u, m, vtype=GRB.CONTINUOUS, name="lambda")  # Remaining cargo at arrival at customer nodes
+gamma = model.addVars(u, n, vtype=GRB.CONTINUOUS, name="gamma")  # Amount of energy recharged at discharging stations
+# Constraints
+# C1: Ensure every customer is visited exactly once
+for i in range(m):
+    model.addConstr(gp.quicksum(alpha[k, i, j] for k in range(u) for j in range(m)) == 1, f"C1_{i}")
+
+# C2: Ensure flow conservation at each node (incoming = outgoing)
+for k in range(u):
+    for i in range(m):
+        model.addConstr(gp.quicksum(alpha[k, i, j] for j in range(m)) == gp.quicksum(alpha[k, j, i] for j in range(m)), f"C2_{i}_{k}")
+
+# C3: Vehicle load constraint (cannot exceed carrying capacity)
+for k in range(u):
+    for i in range(m):
+        model.addConstr(lambda_[k, i] <= C, f"C3_{i}_{k}")
+
+# C4: Energy constraints (cannot exceed available SoC)
+for k in range(u):
+    for i in range(m):
+        model.addConstr(theta[k, i] <= Q, f"C4_{i}_{k}")
+
+# C5: Recharging energy at discharging stations (up to full charge)
+for k in range(u):
+    for p in range(n):
+        model.addConstr(gamma[k, p] <= Q, f"C5_{p}_{k}")
+# Objective: Minimize total trip cost (including discharging and vehicle distance)
+objective = gp.quicksum(di[i][j] * alpha[k, i, j] for k in range(u) for i in range(m) for j in range(m)) + \
+            gp.quicksum(gamma[k, p] * R for k in range(u) for p in range(n))
+model.setObjective(objective, GRB.MINIMIZE)
+# Optimize the model
+model.optimize()
+# Output the solution and display the routes
+if model.status == GRB.OPTIMAL:
+    print("Optimal solution found. Routes for each vehicle through the nodes (customers and discharging stations):")
+    for k in range(u):
+        route = []
+        for i in range(m):  # Check for travel between customer nodes
+            for j in range(m):
+                if alpha[k, i, j].x > 0.5:  # if the edge is selected in the solution
+                    route.append(f"Customer {i} -> Customer {j}")
+        for p in range(n):  # Check for visits to discharging stations
+            for i in range(m):
+                if beta[k, p, i].x > 0.5:
+                    route.append(f"Discharging Station {p} -> Customer {i}")
+            if gamma[k, p].x > 0.5:  # If recharged at a station
+                route.append(f"Recharged at Discharging Station {p}")
+        print(f"Vehicle {k} route: {route}")
+else:
+    print("No optimal solution found.")
